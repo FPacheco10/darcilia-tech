@@ -1,4 +1,3 @@
-
 export type Perfil =
   | "administrador"
   | "ti"
@@ -36,12 +35,12 @@ export const modulos: Modulo[] = [
     perfis: ["administrador", "ti"],
   },
   {
-  id: "equipamentos",
-  nome: "Equipamentos",
-  caminho: "/ti/equipamentos",
-  icone: "🖥️",
-  perfis: ["administrador", "ti"],
-},
+    id: "equipamentos",
+    nome: "Equipamentos",
+    caminho: "/ti/equipamentos",
+    icone: "🖥️",
+    perfis: ["administrador", "ti"],
+  },
   {
     id: "secretaria",
     nome: "Secretaria",
@@ -76,5 +75,18 @@ export const modulos: Modulo[] = [
     caminho: "/funcionarios",
     icone: "👥",
     perfis: ["administrador"],
+  },
+  {
+    id: "perfil",
+    nome: "Meu perfil",
+    caminho: "/perfil",
+    icone: "👤",
+    perfis: [
+      "administrador",
+      "ti",
+      "secretaria",
+      "financeiro",
+      "consulta",
+    ],
   },
 ];

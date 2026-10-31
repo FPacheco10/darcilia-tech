@@ -76,6 +76,61 @@ $$;
 
 ALTER FUNCTION "public"."atualizar_acesso_funcionario"("funcionario_id" "uuid", "novo_perfil" "text", "novo_ativo" boolean) OWNER TO "postgres";
 
+
+CREATE OR REPLACE FUNCTION "public"."atualizar_meu_perfil"("novo_nome" "text", "novo_caminho_foto" "text") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $_$
+declare
+  usuario_id uuid := auth.uid();
+begin
+  if usuario_id is null then
+    raise exception 'Entre no sistema para continuar.'
+      using errcode = '42501';
+  end if;
+
+  if novo_nome is null
+    or length(trim(novo_nome)) < 2
+    or length(trim(novo_nome)) > 150
+  then
+    raise exception 'Informe um nome entre 2 e 150 caracteres.';
+  end if;
+
+  if novo_caminho_foto is not null then
+    if novo_caminho_foto !~ (
+      '^' || usuario_id::text ||
+      '/[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)$'
+    ) then
+      raise exception 'Caminho da foto inválido.';
+    end if;
+
+    if not exists (
+      select 1
+      from storage.objects
+      where bucket_id = 'fotos-perfil'
+        and name = novo_caminho_foto
+    ) then
+      raise exception 'A foto enviada não foi encontrada.';
+    end if;
+  end if;
+
+  update public.perfis
+  set
+    nome = trim(novo_nome),
+    foto_url = novo_caminho_foto
+  where id = usuario_id
+    and ativo = true;
+
+  if not found then
+    raise exception 'Perfil não encontrado ou conta inativa.'
+      using errcode = '42501';
+  end if;
+end;
+$_$;
+
+
+ALTER FUNCTION "public"."atualizar_meu_perfil"("novo_nome" "text", "novo_caminho_foto" "text") OWNER TO "postgres";
+
 SET default_tablespace = '';
 
 SET default_table_access_method = "heap";
@@ -844,6 +899,12 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 REVOKE ALL ON FUNCTION "public"."atualizar_acesso_funcionario"("funcionario_id" "uuid", "novo_perfil" "text", "novo_ativo" boolean) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."atualizar_acesso_funcionario"("funcionario_id" "uuid", "novo_perfil" "text", "novo_ativo" boolean) TO "service_role";
 GRANT ALL ON FUNCTION "public"."atualizar_acesso_funcionario"("funcionario_id" "uuid", "novo_perfil" "text", "novo_ativo" boolean) TO "authenticated";
+
+
+
+REVOKE ALL ON FUNCTION "public"."atualizar_meu_perfil"("novo_nome" "text", "novo_caminho_foto" "text") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."atualizar_meu_perfil"("novo_nome" "text", "novo_caminho_foto" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."atualizar_meu_perfil"("novo_nome" "text", "novo_caminho_foto" "text") TO "authenticated";
 
 
 
