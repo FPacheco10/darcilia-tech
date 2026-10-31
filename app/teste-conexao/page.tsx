@@ -1,12 +1,15 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { createClient } from "@/lib/supabase/client";
 
 export default function TesteConexao() {
   const [mensagem, setMensagem] = useState("Testando conexão...");
 
   useEffect(() => {
+    const supabase = createClient();
+
     async function testar() {
       const { error } = await supabase
         .from("teste_conexao")
@@ -14,7 +17,10 @@ export default function TesteConexao() {
         .limit(1);
 
       if (error) {
-        setMensagem("Conexão com Supabase iniciada, mas houve um erro: " + error.message);
+        setMensagem(
+          "Conexão com Supabase iniciada, mas houve um erro: " +
+            error.message
+        );
       } else {
         setMensagem("Conexão com Supabase funcionando!");
       }
