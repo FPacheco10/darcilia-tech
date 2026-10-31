@@ -1,22 +1,26 @@
-
+import { Suspense } from "react";
+import { connection } from "next/server";
 import { verificarAcesso } from "@/lib/auth/verificarAcesso";
+import Financeiro from "./Financeiro";
 
-export default async function FinanceiroPage() {
+async function AreaFinanceiro() {
+  await connection();
+
   const { perfil } = await verificarAcesso("financeiro");
 
+  return <Financeiro nomeUsuario={perfil.nome} />;
+}
+
+export default function FinanceiroPage() {
   return (
-    <main className="min-h-screen bg-slate-950 p-8 text-white">
-      <h1 className="text-3xl font-bold">
-        Gestão Financeira
-      </h1>
-
-      <p className="mt-4 text-slate-300">
-        Bem-vindo, {perfil.nome}!
-      </p>
-
-      <p className="mt-2 text-slate-400">
-        Módulo financeiro do Darcilia Tech.
-      </p>
-    </main>
+    <Suspense
+      fallback={
+        <p role="status" className="p-8 text-slate-300">
+          Carregando Financeiro...
+        </p>
+      }
+    >
+      <AreaFinanceiro />
+    </Suspense>
   );
 }

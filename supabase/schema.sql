@@ -461,6 +461,30 @@ CREATE TABLE IF NOT EXISTS "public"."equipamentos" (
 ALTER TABLE "public"."equipamentos" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."lancamentos_financeiros" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tipo" "text" NOT NULL,
+    "descricao" "text" NOT NULL,
+    "categoria" "text" NOT NULL,
+    "valor" numeric(12,2) NOT NULL,
+    "vencimento" "date" NOT NULL,
+    "status" "text" DEFAULT 'pendente'::"text" NOT NULL,
+    "data_pagamento" "date",
+    "observacoes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "lancamentos_financeiros_categoria_check" CHECK (("length"(TRIM(BOTH FROM "categoria")) > 0)),
+    CONSTRAINT "lancamentos_financeiros_descricao_check" CHECK (("length"(TRIM(BOTH FROM "descricao")) > 0)),
+    CONSTRAINT "lancamentos_financeiros_status_check" CHECK (("status" = ANY (ARRAY['pendente'::"text", 'pago'::"text", 'cancelado'::"text"]))),
+    CONSTRAINT "lancamentos_financeiros_tipo_check" CHECK (("tipo" = ANY (ARRAY['receita'::"text", 'despesa'::"text"]))),
+    CONSTRAINT "lancamentos_financeiros_valor_check" CHECK (("valor" > (0)::numeric)),
+    CONSTRAINT "pagamento_coerente" CHECK (((("status" = 'pago'::"text") AND ("data_pagamento" IS NOT NULL)) OR (("status" = ANY (ARRAY['pendente'::"text", 'cancelado'::"text"])) AND ("data_pagamento" IS NULL))))
+);
+
+
+ALTER TABLE "public"."lancamentos_financeiros" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."livros" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "codigo" "text" NOT NULL,
@@ -586,6 +610,11 @@ ALTER TABLE ONLY "public"."equipamentos"
 
 
 
+ALTER TABLE ONLY "public"."lancamentos_financeiros"
+    ADD CONSTRAINT "lancamentos_financeiros_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."livros"
     ADD CONSTRAINT "livros_codigo_key" UNIQUE ("codigo");
 
@@ -622,6 +651,10 @@ ALTER TABLE ONLY "public"."teste_conexao"
 
 
 CREATE UNIQUE INDEX "emprestimo_aberto_por_equipamento" ON "public"."emprestimos" USING "btree" ("equipamento_id") WHERE ("devolvido_em" IS NULL);
+
+
+
+CREATE INDEX "lancamentos_financeiros_vencimento_idx" ON "public"."lancamentos_financeiros" USING "btree" ("vencimento");
 
 
 
@@ -673,6 +706,14 @@ ALTER TABLE ONLY "public"."perfis"
 
 ALTER TABLE ONLY "public"."perfis_usuarios"
     ADD CONSTRAINT "perfis_usuarios_id_fkey" FOREIGN KEY ("id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
+
+
+
+CREATE POLICY "Financeiro e administrador gerenciam lancamentos" ON "public"."lancamentos_financeiros" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."perfis" "p"
+  WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."ativo" = true) AND ("p"."perfil" = ANY (ARRAY['administrador'::"text", 'financeiro'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."perfis" "p"
+  WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."ativo" = true) AND ("p"."perfil" = ANY (ARRAY['administrador'::"text", 'financeiro'::"text"]))))));
 
 
 
@@ -775,6 +816,9 @@ ALTER TABLE "public"."emprestimos_livros" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."equipamentos" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."lancamentos_financeiros" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."livros" ENABLE ROW LEVEL SECURITY;
 
 
@@ -864,6 +908,11 @@ GRANT SELECT,INSERT,UPDATE ON TABLE "public"."emprestimos_livros" TO "authentica
 
 GRANT ALL ON TABLE "public"."equipamentos" TO "service_role";
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."equipamentos" TO "authenticated";
+
+
+
+GRANT ALL ON TABLE "public"."lancamentos_financeiros" TO "service_role";
+GRANT SELECT,INSERT,UPDATE ON TABLE "public"."lancamentos_financeiros" TO "authenticated";
 
 
 
