@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -70,6 +71,9 @@ export default function Biblioteca() {
   const [mostrarFormulario, setMostrarFormulario] = useState(false);
   const [idEdicao, setIdEdicao] = useState<string | null>(null);
   const [formulario, setFormulario] = useState<Formulario>(vazio);
+
+  const livroEmEdicao = livros.find((livro) => livro.id === idEdicao);
+  const situacaoBloqueada = livroEmEdicao?.status === "emprestado";
 
   useEffect(() => {
     let ativo = true;
@@ -174,6 +178,26 @@ export default function Biblioteca() {
       return;
     }
 
+    if (idEdicao && !livroEmEdicao) {
+      setErro("Exemplar não encontrado. Atualize a página.");
+      return;
+    }
+
+    const mudouSituacao =
+      !!livroEmEdicao && formulario.status !== livroEmEdicao.status;
+
+    if (
+      (!idEdicao && formulario.status === "emprestado") ||
+      (mudouSituacao &&
+        (formulario.status === "emprestado" ||
+          livroEmEdicao?.status === "emprestado"))
+    ) {
+      setErro(
+        "Use a tela de Empréstimos e devoluções para retirar ou devolver um exemplar."
+      );
+      return;
+    }
+
     const dados = {
       codigo,
       titulo,
@@ -183,7 +207,6 @@ export default function Biblioteca() {
       ano_publicacao: ano,
       categoria: formulario.categoria.trim() || null,
       localizacao: formulario.localizacao.trim() || null,
-      status: formulario.status,
       observacoes: formulario.observacoes.trim() || null,
     };
 
@@ -195,10 +218,14 @@ export default function Biblioteca() {
             .from("livros")
             .update({
               ...dados,
+              ...(mudouSituacao ? { status: formulario.status } : {}),
               updated_at: new Date().toISOString(),
             })
             .eq("id", idEdicao)
-        : supabase.from("livros").insert(dados);
+        : supabase.from("livros").insert({
+            ...dados,
+            status: formulario.status,
+          });
 
       const { data, error } = await consulta.select(campos).single();
 
@@ -264,7 +291,9 @@ export default function Biblioteca() {
 
       if (error) {
         setErro(
-          `Não foi possível excluir. Atualize a página para conferir a situação do exemplar. ${error.message}`
+          error.code === "23503"
+            ? "Este exemplar possui registros vinculados, como histórico de empréstimos. Altere a situação para Inativo em vez de excluí-lo."
+            : `Não foi possível excluir. Atualize a página para conferir a situação do exemplar. ${error.message}`
         );
         return;
       }
@@ -324,7 +353,11 @@ export default function Biblioteca() {
     { campo: "isbn", titulo: "ISBN", obrigatorio: false },
     { campo: "editora", titulo: "Editora", obrigatorio: false },
     { campo: "categoria", titulo: "Categoria", obrigatorio: false },
-    { campo: "localizacao", titulo: "Localização / prateleira", obrigatorio: false },
+    {
+      campo: "localizacao",
+      titulo: "Localização / prateleira",
+      obrigatorio: false,
+    },
   ] as const;
 
   const input =
@@ -341,21 +374,32 @@ export default function Biblioteca() {
             DARCILIA TECH / BIBLIOTECA
           </p>
 
-          <h1 className="mt-2 text-3xl font-bold">Acervo da Biblioteca</h1>
+          <h1 className="mt-2 text-3xl font-bold">
+            Acervo da Biblioteca
+          </h1>
 
           <p className="mt-2 text-slate-400">
             Cadastro e acompanhamento dos exemplares.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={novoLivro}
-          disabled={ocupado || carregando}
-          className={botao}
-        >
-          + Novo exemplar
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/biblioteca/emprestimos"
+            className="rounded-lg border border-slate-700 px-5 py-3 font-semibold text-white hover:bg-slate-800"
+          >
+            Empréstimos e devoluções
+          </Link>
+
+          <button
+            type="button"
+            onClick={novoLivro}
+            disabled={ocupado || carregando}
+            className={botao}
+          >
+            + Novo exemplar
+          </button>
+        </div>
       </header>
 
       {erro && (
@@ -435,19 +479,33 @@ export default function Biblioteca() {
 
               <label className="block space-y-2">
                 <span className="text-sm">Situação</span>
+
                 <select
+                  disabled={situacaoBloqueada}
                   value={formulario.status}
                   onChange={(event) =>
                     alterar("status", event.target.value as Situacao)
                   }
-                  className={input}
+                  className={`${input} disabled:opacity-60`}
                 >
-                  {Object.entries(situacoes).map(([valor, titulo]) => (
-                    <option key={valor} value={valor}>
-                      {titulo}
-                    </option>
-                  ))}
+                  {situacaoBloqueada ? (
+                    <option value="emprestado">Emprestado</option>
+                  ) : (
+                    Object.entries(situacoes)
+                      .filter(([valor]) => valor !== "emprestado")
+                      .map(([valor, titulo]) => (
+                        <option key={valor} value={valor}>
+                          {titulo}
+                        </option>
+                      ))
+                  )}
                 </select>
+
+                <p className="text-xs text-slate-400">
+                  {situacaoBloqueada
+                    ? "Registre a devolução em Empréstimos e devoluções para liberar o exemplar."
+                    : "A situação Emprestado é definida ao registrar uma retirada."}
+                </p>
               </label>
             </div>
 

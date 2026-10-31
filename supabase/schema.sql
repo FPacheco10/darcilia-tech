@@ -122,6 +122,50 @@ $$;
 ALTER FUNCTION "public"."listar_funcionarios"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."proteger_situacao_livro"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO ''
+    AS $$
+begin
+  -- A sincronização dos empréstimos usa uma função privilegiada.
+  -- As regras abaixo protegem as alterações feitas pela aplicação.
+  if current_user in ('authenticated', 'anon') then
+    if TG_OP = 'INSERT' then
+      if new.status = 'emprestado' then
+        raise exception
+          'Cadastre o exemplar e registre a retirada na tela de empréstimos.';
+      end if;
+
+    elsif TG_OP = 'UPDATE' then
+      if new.status is distinct from old.status then
+        if old.status = 'emprestado'
+          or new.status = 'emprestado'
+        then
+          raise exception
+            'Use a tela de empréstimos para registrar retiradas e devoluções.';
+        end if;
+
+        if exists (
+          select 1
+          from public.emprestimos_livros
+          where livro_id = old.id
+            and devolvido_em is null
+        ) then
+          raise exception
+            'Registre a devolução antes de alterar a situação deste exemplar.';
+        end if;
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."proteger_situacao_livro"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."sincronizar_equipamento_emprestimo"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO ''
@@ -200,6 +244,88 @@ $$;
 
 
 ALTER FUNCTION "public"."sincronizar_equipamento_emprestimo"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."sincronizar_livro_emprestimo"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO ''
+    AS $$
+declare
+  exemplar public.livros%rowtype;
+begin
+  if TG_OP = 'UPDATE' then
+    if new.livro_id is distinct from old.livro_id then
+      raise exception 'Não é permitido trocar o exemplar do empréstimo.';
+    end if;
+
+    if new.retirado_em is distinct from old.retirado_em then
+      raise exception 'Não é permitido alterar a data da retirada.';
+    end if;
+
+    if old.devolvido_em is not null then
+      if new.devolvido_em is distinct from old.devolvido_em then
+        raise exception 'Não é permitido alterar uma devolução registrada.';
+      end if;
+
+      return new;
+    end if;
+
+    if new.devolvido_em is null then
+      return new;
+    end if;
+  end if;
+
+  select *
+  into exemplar
+  from public.livros
+  where id = new.livro_id
+  for update;
+
+  if not found then
+    raise exception 'Exemplar não encontrado.';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    if new.devolvido_em is not null then
+      raise exception 'Registre primeiro a retirada.';
+    end if;
+
+    if exemplar.status <> 'disponivel' then
+      raise exception 'Este exemplar não está disponível para retirada.';
+    end if;
+
+    if exists (
+      select 1
+      from public.emprestimos_livros
+      where livro_id = new.livro_id
+        and devolvido_em is null
+    ) then
+      raise exception 'Este exemplar já possui um empréstimo em aberto.';
+    end if;
+
+    new.retirado_em := now();
+
+    update public.livros
+    set status = 'emprestado',
+        updated_at = now()
+    where id = new.livro_id;
+
+  elsif TG_OP = 'UPDATE' then
+    new.devolvido_em := now();
+
+    update public.livros
+    set status = 'disponivel',
+        updated_at = now()
+    where id = new.livro_id
+      and status = 'emprestado';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."sincronizar_livro_emprestimo"() OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."aluno_responsaveis" (
@@ -289,6 +415,26 @@ CREATE TABLE IF NOT EXISTS "public"."emprestimos" (
 
 
 ALTER TABLE "public"."emprestimos" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."emprestimos_livros" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "livro_id" "uuid" NOT NULL,
+    "nome_leitor" "text" NOT NULL,
+    "turma_setor" "text" NOT NULL,
+    "retirado_em" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "previsto_para" timestamp with time zone NOT NULL,
+    "devolvido_em" timestamp with time zone,
+    "observacoes" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "devolucao_livro_apos_retirada" CHECK ((("devolvido_em" IS NULL) OR ("devolvido_em" >= "retirado_em"))),
+    CONSTRAINT "emprestimos_livros_nome_leitor_check" CHECK (("length"(TRIM(BOTH FROM "nome_leitor")) > 0)),
+    CONSTRAINT "emprestimos_livros_turma_setor_check" CHECK (("length"(TRIM(BOTH FROM "turma_setor")) > 0)),
+    CONSTRAINT "previsao_livro_apos_retirada" CHECK (("previsto_para" >= "retirado_em"))
+);
+
+
+ALTER TABLE "public"."emprestimos_livros" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."equipamentos" (
@@ -420,6 +566,11 @@ ALTER TABLE ONLY "public"."chamados"
 
 
 
+ALTER TABLE ONLY "public"."emprestimos_livros"
+    ADD CONSTRAINT "emprestimos_livros_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."emprestimos"
     ADD CONSTRAINT "emprestimos_pkey" PRIMARY KEY ("id");
 
@@ -474,7 +625,19 @@ CREATE UNIQUE INDEX "emprestimo_aberto_por_equipamento" ON "public"."emprestimos
 
 
 
+CREATE UNIQUE INDEX "livro_com_emprestimo_aberto" ON "public"."emprestimos_livros" USING "btree" ("livro_id") WHERE ("devolvido_em" IS NULL);
+
+
+
+CREATE OR REPLACE TRIGGER "proteger_situacao_livro" BEFORE INSERT OR UPDATE ON "public"."livros" FOR EACH ROW EXECUTE FUNCTION "public"."proteger_situacao_livro"();
+
+
+
 CREATE OR REPLACE TRIGGER "sincronizar_equipamento_emprestimo" BEFORE INSERT OR UPDATE ON "public"."emprestimos" FOR EACH ROW EXECUTE FUNCTION "public"."sincronizar_equipamento_emprestimo"();
+
+
+
+CREATE OR REPLACE TRIGGER "sincronizar_livro_emprestimo" BEFORE INSERT OR UPDATE ON "public"."emprestimos_livros" FOR EACH ROW EXECUTE FUNCTION "public"."sincronizar_livro_emprestimo"();
 
 
 
@@ -495,6 +658,11 @@ ALTER TABLE ONLY "public"."auditoria"
 
 ALTER TABLE ONLY "public"."emprestimos"
     ADD CONSTRAINT "emprestimos_equipamento_id_fkey" FOREIGN KEY ("equipamento_id") REFERENCES "public"."equipamentos"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."emprestimos_livros"
+    ADD CONSTRAINT "emprestimos_livros_livro_id_fkey" FOREIGN KEY ("livro_id") REFERENCES "public"."livros"("id") ON DELETE RESTRICT;
 
 
 
@@ -523,6 +691,14 @@ CREATE POLICY "Secretaria consulta chromebooks" ON "public"."equipamentos" FOR S
 
 
 CREATE POLICY "Secretaria e administrador gerenciam alunos" ON "public"."alunos" TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."perfis" "p"
+  WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."ativo" = true) AND ("p"."perfil" = ANY (ARRAY['administrador'::"text", 'secretaria'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."perfis" "p"
+  WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."ativo" = true) AND ("p"."perfil" = ANY (ARRAY['administrador'::"text", 'secretaria'::"text"]))))));
+
+
+
+CREATE POLICY "Secretaria e administrador gerenciam emprestimos de livros" ON "public"."emprestimos_livros" TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."perfis" "p"
   WHERE (("p"."id" = ( SELECT "auth"."uid"() AS "uid")) AND ("p"."ativo" = true) AND ("p"."perfil" = ANY (ARRAY['administrador'::"text", 'secretaria'::"text"])))))) WITH CHECK ((EXISTS ( SELECT 1
    FROM "public"."perfis" "p"
@@ -593,6 +769,9 @@ ALTER TABLE "public"."chamados" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."emprestimos" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."emprestimos_livros" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."equipamentos" ENABLE ROW LEVEL SECURITY;
 
 
@@ -636,8 +815,18 @@ GRANT ALL ON FUNCTION "public"."listar_funcionarios"() TO "authenticated";
 
 
 
+REVOKE ALL ON FUNCTION "public"."proteger_situacao_livro"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."proteger_situacao_livro"() TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."sincronizar_equipamento_emprestimo"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."sincronizar_equipamento_emprestimo"() TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."sincronizar_livro_emprestimo"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."sincronizar_livro_emprestimo"() TO "service_role";
 
 
 
@@ -665,6 +854,11 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE "public"."chamados" TO "authenticated
 
 GRANT ALL ON TABLE "public"."emprestimos" TO "service_role";
 GRANT SELECT,INSERT,UPDATE ON TABLE "public"."emprestimos" TO "authenticated";
+
+
+
+GRANT ALL ON TABLE "public"."emprestimos_livros" TO "service_role";
+GRANT SELECT,INSERT,UPDATE ON TABLE "public"."emprestimos_livros" TO "authenticated";
 
 
 
