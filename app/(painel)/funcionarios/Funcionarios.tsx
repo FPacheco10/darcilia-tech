@@ -15,12 +15,34 @@ type Props = {
   usuarioAtualId: string;
 };
 
+type Cadastro = {
+  nome: string;
+  email: string;
+  senha: string;
+  perfil: Perfil;
+  ativo: boolean;
+};
+
+type RespostaCadastro = {
+  erro?: string;
+  mensagem?: string;
+  funcionario?: Funcionario;
+};
+
 const nomesPerfis: Record<Perfil, string> = {
   administrador: "Administrador",
   ti: "TI",
   secretaria: "Secretaria",
   financeiro: "Financeiro",
   consulta: "Consulta",
+};
+
+const cadastroVazio: Cadastro = {
+  nome: "",
+  email: "",
+  senha: "",
+  perfil: "consulta",
+  ativo: false,
 };
 
 export default function Funcionarios({ usuarioAtualId }: Props) {
@@ -33,6 +55,9 @@ export default function Funcionarios({ usuarioAtualId }: Props) {
   const [mensagem, setMensagem] = useState("");
   const [pesquisa, setPesquisa] = useState("");
   const [filtro, setFiltro] = useState("todos");
+
+  const [mostrarCadastro, setMostrarCadastro] = useState(false);
+  const [cadastro, setCadastro] = useState<Cadastro>(cadastroVazio);
 
   const [selecionado, setSelecionado] = useState<Funcionario | null>(null);
   const [novoPerfil, setNovoPerfil] = useState<Perfil>("consulta");
@@ -69,11 +94,128 @@ export default function Funcionarios({ usuarioAtualId }: Props) {
     };
   }, [supabase]);
 
+  function alterarCadastro<K extends keyof Cadastro>(
+    campo: K,
+    valor: Cadastro[K]
+  ) {
+    setCadastro((atual) => ({ ...atual, [campo]: valor }));
+  }
+
+  function abrirCadastro() {
+    if (salvando) return;
+
+    setErro("");
+    setMensagem("");
+    setSelecionado(null);
+    setCadastro(cadastroVazio);
+    setMostrarCadastro(true);
+  }
+
+  function fecharCadastro() {
+    setMostrarCadastro(false);
+    setCadastro(cadastroVazio);
+  }
+
+  async function cadastrar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (salvando) return;
+
+    setErro("");
+    setMensagem("");
+
+    const nome = cadastro.nome.trim();
+    const email = cadastro.email.trim().toLowerCase();
+
+    if (nome.length < 2 || nome.length > 150) {
+      setErro("Informe um nome entre 2 e 150 caracteres.");
+      return;
+    }
+
+    if (
+      email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ) {
+      setErro("Informe um e-mail válido.");
+      return;
+    }
+
+    if (cadastro.senha.length < 12 || cadastro.senha.length > 128) {
+      setErro("A senha deve ter entre 12 e 128 caracteres.");
+      return;
+    }
+
+    setSalvando(true);
+
+    try {
+      const resposta = await fetch("/api/funcionarios", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          nome,
+          email,
+          senha: cadastro.senha,
+          perfil: cadastro.perfil,
+          ativo: cadastro.ativo,
+        }),
+      });
+
+      const resultado =
+        (await resposta.json()) as RespostaCadastro;
+
+      if (!resposta.ok) {
+        setErro(
+          resultado.erro ??
+            "Não foi possível cadastrar. Confira a lista antes de tentar novamente."
+        );
+        return;
+      }
+
+      const funcionario = resultado.funcionario;
+
+      if (!funcionario) {
+        setErro(
+          "O servidor respondeu sem os dados da conta. Atualize a lista antes de tentar novamente."
+        );
+        return;
+      }
+
+      setFuncionarios((lista) =>
+        [
+          ...lista.filter((item) => item.id !== funcionario.id),
+          funcionario,
+        ].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"))
+      );
+
+      // Garante que a nova conta fique visível na lista.
+      setPesquisa("");
+      setFiltro("todos");
+      fecharCadastro();
+      setMensagem(
+        funcionario.ativo
+          ? "Funcionário cadastrado com acesso ativo!"
+          : "Funcionário cadastrado. A conta está inativa."
+      );
+    } catch {
+      setErro(
+        "Não foi possível confirmar o cadastro. Atualize a lista e confira Authentication → Users no Supabase antes de tentar novamente."
+      );
+    } finally {
+      // A senha não permanece no formulário após o envio.
+      setCadastro((atual) => ({ ...atual, senha: "" }));
+      setSalvando(false);
+    }
+  }
+
   function editar(funcionario: Funcionario) {
     if (funcionario.id === usuarioAtualId || salvando) return;
 
     setErro("");
     setMensagem("");
+    fecharCadastro();
     setSelecionado(funcionario);
     setNovoPerfil(funcionario.perfil);
     setNovoAtivo(funcionario.ativo);
@@ -168,18 +310,32 @@ export default function Funcionarios({ usuarioAtualId }: Props) {
   const botao =
     "rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 
+  const cancelar =
+    "rounded-lg border border-slate-700 px-5 py-3 hover:bg-slate-800";
+
   return (
     <main className="mx-auto max-w-7xl">
-      <header className="mb-8">
-        <p className="text-sm text-blue-400">
-          DARCILIA TECH / FUNCIONÁRIOS
-        </p>
-        <h1 className="mt-2 text-3xl font-bold">
-          Gestão de Funcionários
-        </h1>
-        <p className="mt-2 text-slate-400">
-          Consulte as contas e gerencie seus perfis de acesso.
-        </p>
+      <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-sm text-blue-400">
+            DARCILIA TECH / FUNCIONÁRIOS
+          </p>
+          <h1 className="mt-2 text-3xl font-bold">
+            Gestão de Funcionários
+          </h1>
+          <p className="mt-2 text-slate-400">
+            Cadastre contas e gerencie seus perfis de acesso.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={abrirCadastro}
+          disabled={salvando || carregando}
+          className={botao}
+        >
+          + Novo funcionário
+        </button>
       </header>
 
       {erro && (
@@ -213,6 +369,127 @@ export default function Funcionarios({ usuarioAtualId }: Props) {
           </div>
         ))}
       </section>
+
+      {mostrarCadastro && (
+        <form
+          onSubmit={cadastrar}
+          className="mb-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
+        >
+          <h2 className="mb-5 text-xl font-bold">
+            Cadastrar funcionário
+          </h2>
+
+          <fieldset disabled={salvando} className="space-y-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block space-y-2">
+                <span className="text-sm">Nome completo</span>
+                <input
+                  required
+                  minLength={2}
+                  maxLength={150}
+                  autoComplete="name"
+                  value={cadastro.nome}
+                  onChange={(event) =>
+                    alterarCadastro("nome", event.target.value)
+                  }
+                  className={input}
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-sm">E-mail de acesso</span>
+                <input
+                  required
+                  type="email"
+                  maxLength={254}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  value={cadastro.email}
+                  onChange={(event) =>
+                    alterarCadastro("email", event.target.value)
+                  }
+                  className={input}
+                />
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-sm">Senha</span>
+                <input
+                  required
+                  type="password"
+                  minLength={12}
+                  maxLength={128}
+                  autoComplete="new-password"
+                  value={cadastro.senha}
+                  onChange={(event) =>
+                    alterarCadastro("senha", event.target.value)
+                  }
+                  className={input}
+                />
+                <p className="text-xs text-slate-400">
+                  Use entre 12 e 128 caracteres.
+                </p>
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-sm">Perfil de acesso</span>
+                <select
+                  value={cadastro.perfil}
+                  onChange={(event) =>
+                    alterarCadastro("perfil", event.target.value as Perfil)
+                  }
+                  className={input}
+                >
+                  {Object.entries(nomesPerfis).map(([valor, nome]) => (
+                    <option key={valor} value={valor}>
+                      {nome}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block space-y-2">
+                <span className="text-sm">Situação</span>
+                <select
+                  value={cadastro.ativo ? "ativo" : "inativo"}
+                  onChange={(event) =>
+                    alterarCadastro("ativo", event.target.value === "ativo")
+                  }
+                  className={input}
+                >
+                  <option value="inativo">Inativo</option>
+                  <option value="ativo">Ativo</option>
+                </select>
+              </label>
+            </div>
+
+            <p className="text-sm text-slate-400">
+              O e-mail será confirmado administrativamente. A conta
+              ativa poderá acessar o sistema com a senha definida.
+              Nenhum e-mail será enviado por esse cadastro.
+            </p>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="submit"
+                disabled={salvando}
+                className={botao}
+              >
+                {salvando ? "Cadastrando..." : "Cadastrar funcionário"}
+              </button>
+
+              <button
+                type="button"
+                onClick={fecharCadastro}
+                className={cancelar}
+              >
+                Cancelar
+              </button>
+            </div>
+          </fieldset>
+        </form>
+      )}
 
       {selecionado && (
         <form
@@ -269,7 +546,7 @@ export default function Funcionarios({ usuarioAtualId }: Props) {
               <button
                 type="button"
                 onClick={() => setSelecionado(null)}
-                className="rounded-lg border border-slate-700 px-5 py-3"
+                className={cancelar}
               >
                 Cancelar
               </button>
