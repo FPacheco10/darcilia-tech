@@ -33,7 +33,7 @@ async function PainelAutenticado({ children }: Props) {
 
   const { data: perfil, error: perfilError } = await supabase
     .from("perfis")
-    .select("perfil, ativo")
+    .select("nome, perfil, ativo, foto_url")
     .eq("id", user.id)
     .single();
 
@@ -46,9 +46,35 @@ async function PainelAutenticado({ children }: Props) {
     redirect("/acesso-negado");
   }
 
+  let fotoUrl: string | null = null;
+
+  const caminhoFoto = perfil.foto_url;
+
+  if (
+    typeof caminhoFoto === "string" &&
+    caminhoFoto.startsWith(`${user.id}/`) &&
+    !caminhoFoto.includes("://")
+  ) {
+    try {
+      const { data, error } = await supabase.storage
+        .from("fotos-perfil")
+        .createSignedUrl(caminhoFoto, 3600);
+
+      if (!error && data?.signedUrl) {
+        fotoUrl = data.signedUrl;
+      }
+    } catch {
+      // Se a foto não carregar, o menu exibe a inicial do nome.
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white">
-      <MenuLateral perfil={perfil.perfil as Perfil} />
+      <MenuLateral
+        perfil={perfil.perfil as Perfil}
+        nome={perfil.nome}
+        fotoUrl={fotoUrl}
+      />
 
       <div className="min-h-screen px-4 pb-8 pt-20 md:ml-64 md:p-8">
         {children}
